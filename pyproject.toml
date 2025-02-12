@@ -1,0 +1,18 @@
+[project]
+name = "lesson-machine-learning"
+version = "0"
+description = "Default template for PDM package"
+authors = [
+    {name = "RF-Tar-Railt", email = "rf_tar_railt@qq.com"},
+]
+dependencies = [
+    "pygame>=2.6.1",
+    "numpy>=2.2.2",
+]
+requires-python = "==3.11.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[tool.pdm]
+distribution = false
