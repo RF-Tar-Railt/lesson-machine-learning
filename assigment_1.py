@@ -1,8 +1,8 @@
+import sys
+import numpy as np
 from enum import Enum
 from random import choice
-
 import pygame
-import numpy as np
 
 # 游戏参数
 SIZE = 45
@@ -158,138 +158,219 @@ class Map:
         return self
 
 
-class VisualGridWorld:
+# 初始配置界面类
+class ConfigWindow:
     def __init__(self):
-        self.m = Map(SIZE, SIZE).union_find_set()
-        self.goal = (SIZE - 2, SIZE - 2)
-        self.state = (1, 1)
-        self.path_history = []
+        pygame.init()
+        self.screen = pygame.display.set_mode((400, 300))
+        self.font = pygame.font.Font(None, 32)
+        self.input_box = pygame.Rect(100, 100, 200, 32)
+        self.color_inactive = pygame.Color('lightskyblue3')
+        self.color_active = pygame.Color('dodgerblue2')
+        self.color = self.color_inactive
+        self.text = ''
+        self.active = False
+        self.done = False
+
+    def run(self):
+        while not self.done:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if self.input_box.collidepoint(event.pos):
+                        self.active = not self.active
+                    else:
+                        self.active = False
+                    self.color = self.color_active if self.active else self.color_inactive
+                if event.type == pygame.KEYDOWN:
+                    if self.active:
+                        if event.key == pygame.K_RETURN:
+                            self.done = True
+                        elif event.key == pygame.K_BACKSPACE:
+                            self.text = self.text[:-1]
+                        else:
+                            if event.unicode.isdigit():
+                                self.text += event.unicode
+
+            self.screen.fill((255, 255, 255))
+            txt_surface = self.font.render("Enter maze size (15-45): ", True, self.color)
+            self.screen.blit(txt_surface, (self.input_box.x - 40, self.input_box.y - 40))
+            input_surface = self.font.render(self.text, True, self.color)
+            self.screen.blit(input_surface, (self.input_box.x + 5, self.input_box.y + 5))
+            pygame.draw.rect(self.screen, self.color, self.input_box, 2)
+            pygame.display.flip()
+
+        return max(15, min(45, int(self.text) if self.text else 15))
+
+
+class MazeEnv:
+    def __init__(self, size=5):
+        self.SIZE = size
+        self.maze = Map(SIZE, SIZE).union_find_set().map
+        self.start_pos = (1, 1)
+        self.goal_pos = (self.SIZE - 2, self.SIZE - 2)
+        self.current_pos = self.start_pos
 
     def reset(self):
-        self.state = (1, 1)
-        return self._pos_to_state(self.state)
-
-    def _pos_to_state(self, pos):
-        return pos[0] * SIZE + pos[1]
+        self.current_pos = self.start_pos
+        return self.current_pos
 
     def step(self, action):
-        x, y = self.state
+        x, y = self.current_pos
+
         if action == 0:
-            x = max(x - 1, 0)
+            new_pos = (x - 1, y)
         elif action == 1:
-            x = min(x + 1, SIZE - 1)
+            new_pos = (x + 1, y)
         elif action == 2:
-            y = max(y - 1, 0)
-        elif action == 3:
-            y = min(y + 1, SIZE - 1)
+            new_pos = (x, y - 1)
+        else:
+            new_pos = (x, y + 1)
 
-        new_state = (x, y)
-        reward = -1
+        # 边界检查
+        if new_pos[0] < 1 or new_pos[0] >= self.SIZE or new_pos[1] < 1 or new_pos[1] >= self.SIZE:
+            return self.current_pos, -100, True
 
-        if self.m.map[y, x] == 1:
-            reward = -50
-        elif new_state == self.goal:
-            reward = SIZE ** 2
+        # 障碍物检查
+        if self.maze[y, x] == 1:
+            return self.current_pos, -50, True
 
-        done = new_state == self.goal or self.m.map[y, x] == 1
-        self.state = new_state
-        return self._pos_to_state(new_state), reward, done
+        self.current_pos = new_pos
+
+        if new_pos == self.goal_pos:
+            return new_pos, self.SIZE ** 2, True
+
+        return new_pos, -1, False
 
 
-class VisualQLearningAgent:
-    def __init__(self, alpha=0.1, gamma=0.9, epsilon=10.0):
-        self.alpha = alpha
-        self.gamma = gamma
-        self.epsilon = epsilon
+class QLearningAgent:
+    def __init__(self, size):
+        self.q_table = np.zeros((size, size, 4))
+        self.alpha = 0.1
+        self.gamma = 0.9
+        self.epsilon = 0.5
+        self.epsilon_decay = 0.995
+        self.epsilon_min = 0.0001
 
     def choose_action(self, state):
         if np.random.uniform() < self.epsilon:
             return np.random.choice(4)
         else:
-            return np.argmax(q_table[state])
+            return np.argmax(self.q_table[state[0], state[1]])
 
-    def update_q_table(self, state, action, reward, next_state):
-        predict = q_table[state, action]
-        target = reward + self.gamma * np.max(q_table[next_state])
-        q_table[state, action] += self.alpha * (target - predict)
+    def learn(self, state, action, reward, next_state):
+        current_q = self.q_table[state[0], state[1], action]
+        max_next_q = np.max(self.q_table[next_state[0], next_state[1]])
+        target = reward + self.gamma * max_next_q
+        self.q_table[state[0], state[1], action] += self.alpha * (target - current_q)
 
-
-def draw_grid(surface):
-    # 绘制网格线
-    for x in range(0, WIDTH, GRID_SIZE):
-        pygame.draw.line(surface, COLORS["grid"], (x, 0), (x, HEIGHT))
-    for y in range(0, HEIGHT, GRID_SIZE):
-        pygame.draw.line(surface, COLORS["grid"], (0, y), (WIDTH, y))
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
 
 
-def render(screen, env: VisualGridWorld, reward, path):
-    screen.fill(COLORS["background"])
+class MazeGUI:
+    def __init__(self, env: MazeEnv):
+        pygame.init()
+        self.SIZE = env.maze.shape[0]
+        cell_size = 720 // self.SIZE
+        self.size = (self.SIZE * cell_size, self.SIZE * cell_size)
+        self.screen = pygame.display.set_mode(self.size)
+        self.cell_size = cell_size
+        self.clock = pygame.time.Clock()
+        self.env = env
 
-    # 绘制特殊格子
-    for x in range(SIZE):
-        for y in range(SIZE):
-            rect = pygame.Rect(y * GRID_SIZE, x * GRID_SIZE, GRID_SIZE, GRID_SIZE)
-            if (x, y) == env.goal:
-                pygame.draw.rect(screen, COLORS["treasure"], rect)
-            elif env.m.map[y, x] == 1:
-                pygame.draw.rect(screen, COLORS["trap"], rect)
+    def draw_maze(self, path):
+        self.screen.fill((255, 255, 255))
 
-    # 绘制历史路径
-    for state in path:
-        x = state // SIZE
-        y = state % SIZE
-        center = (y * GRID_SIZE + GRID_SIZE // 2, x * GRID_SIZE + GRID_SIZE // 2)
-        pygame.draw.circle(screen, COLORS["path"], center, GRID_SIZE // 4)
+        for x in range(self.SIZE):
+            for y in range(self.SIZE):
+                rect = (x * self.cell_size, y * self.cell_size,
+                        self.cell_size, self.cell_size)
 
-    # 绘制当前代理
-    x, y = env.state
-    center = (y * GRID_SIZE + GRID_SIZE // 2, x * GRID_SIZE + GRID_SIZE // 2)
-    pygame.draw.circle(screen, COLORS["agent"], center, GRID_SIZE // 3)
+                if self.env.maze[y, x] == 1:
+                    pygame.draw.rect(self.screen, (0, 0, 0), rect)
+                elif (x, y) == self.env.goal_pos:
+                    pygame.draw.rect(self.screen, (255, 0, 0), rect)
+                else:
+                    pygame.draw.rect(self.screen, (200, 200, 200), rect, 1)
 
-    # 显示训练信息
-    font = pygame.font.Font(None, 36)
-    text = font.render(f"Episode: {episode}  Reward: {reward}", True, (0, 0, 0))
-    screen.blit(text, (10, 10))
+        for state in path[:-1]:
+            x, y = state
+            pygame.draw.circle(self.screen, (0, 150, 0),
+                               (x * self.cell_size + self.cell_size // 2,
+                                y * self.cell_size + self.cell_size // 2),
+                               self.cell_size // 4)
 
-    draw_grid(screen)
-    pygame.display.update()
-    pygame.time.delay(10)
-
-
-env = VisualGridWorld()
-agent = VisualQLearningAgent()
-q_table = np.zeros((SIZE**2, 4))
-clock.tick(60)  # 限制60FPS
-# 主循环
-running = True
-episode = 0
-
-while running:
-    # 执行一个训练episode
-    state = env.reset()
-    total_reward = 0
-    done = False
-    path = [SIZE + 1]
-
-    while not done:
-        action = agent.choose_action(state)
-        next_state, reward, done = env.step(action)
-        agent.update_q_table(state, action, reward, next_state)
-        state = next_state
-        total_reward += reward
-        path.append(state)
-        if episode % 100 == 0:
-            render(screen, env, total_reward, path)
-
-    agent.epsilon *= 0.995
-    episode += 1
-
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-        elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
-                running = False
+        pygame.draw.circle(self.screen, (0, 255, 0),
+                           (path[-1][0] * self.cell_size + self.cell_size // 2,
+                            path[-1][1] * self.cell_size + self.cell_size // 2),
+                           self.cell_size // 3)
 
 
-pygame.quit()
+        pygame.display.flip()
+
+    def run(self, env, episodes=20000):
+
+        agent = QLearningAgent(self.SIZE)
+
+        for episode in range(episodes):
+            state = env.reset()
+            total_reward = 0
+            done = False
+            path = [env.start_pos]
+            pygame.display.set_caption(f"Training, Episode: {episode}")
+
+            while not done:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        pygame.quit()
+                        sys.exit()
+                action = agent.choose_action(state)
+                next_state, reward, done = env.step(action)
+                agent.learn(state, action, reward, next_state)
+                state = next_state
+                path.append(state)
+                total_reward += reward
+                if episode % 100 == 0:
+                    self.draw_maze(path)
+                    self.clock.tick(60)
+
+            if episode % 100 == 0:
+                print(f"Episode: {episode}, Reward: {total_reward}, Epsilon: {agent.epsilon:.4f}")
+
+        state = env.reset()
+        done = False
+        pygame.display.set_caption("Testing")
+        path = [env.start_pos]
+
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+
+            if not done:
+                action = agent.choose_action(state)
+                next_state, reward, done = env.step(action)
+                state = next_state
+                path.append(state)
+
+            self.draw_maze(path)
+            self.clock.tick(5)
+
+
+if __name__ == "__main__":
+    # 获取迷宫大小
+    config = ConfigWindow()
+    SIZE = config.run()
+    if SIZE % 2 == 0:
+        SIZE += 1
+    pygame.quit()
+
+    # 创建环境并训练
+    env = MazeEnv(size=SIZE)
+    # 运行可视化
+    gui = MazeGUI(env)
+    gui.run(env)
