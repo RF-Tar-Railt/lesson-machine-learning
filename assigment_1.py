@@ -1,7 +1,7 @@
 import sys
 import numpy as np
 from enum import Enum
-from random import choice
+from random import Random
 import pygame
 
 # 游戏参数
@@ -68,6 +68,8 @@ class Map:
         self.width = width
         self.height = height
         self.map = np.ones((height, width), dtype=int)
+        self.rd = Random()
+        self.rd.seed(123)
         # self.map = [[0 for _ in range(self.width)] for _ in range(self.height)]
 
     def reset_map(self, value: MAP_ENTRY_TYPE):
@@ -115,7 +117,7 @@ class Map:
 
         if len(directions):
             # choose one of the unconnected adjacent entries
-            direction = choice(directions)
+            direction = self.rd.choice(directions)
             if direction == WALL_DIRECTION.WALL_LEFT:
                 adj_x, adj_y = (x - 1, y)
                 self.set_map(2 * x, 2 * y + 1, MAP_ENTRY_TYPE.MAP_EMPTY)
@@ -151,7 +153,7 @@ class Map:
 
         while len(checklist):
             # select a random entry from checklist
-            entry = choice(checklist)
+            entry = self.rd.choice(checklist)
             if not self.check_adjacent_pos(entry[0], entry[1], width, height, parentlist, weightlist):
                 checklist.remove(entry)
 
@@ -217,6 +219,19 @@ class MazeEnv:
         self.current_pos = self.start_pos
         return self.current_pos
 
+    def get_valid_actions(self):
+        x, y = self.current_pos
+        actions = []
+        if self.maze[x - 1, y] == 0:
+            actions.append(0)
+        if x < self.SIZE - 1 and self.maze[x + 1, y] == 0:
+            actions.append(1)
+        if self.maze[x, y - 1] == 0:
+            actions.append(2)
+        if y < self.SIZE - 1 and self.maze[x, y + 1] == 0:
+            actions.append(3)
+        return actions
+
     def step(self, action):
         x, y = self.current_pos
 
@@ -234,7 +249,7 @@ class MazeEnv:
             return self.current_pos, -100, True
 
         # 障碍物检查
-        if self.maze[y, x] == 1:
+        if self.maze[x, y] == 1:
             return self.current_pos, -50, True
 
         self.current_pos = new_pos
@@ -254,9 +269,9 @@ class QLearningAgent:
         self.epsilon_decay = 0.995
         self.epsilon_min = 0.0001
 
-    def choose_action(self, state):
+    def choose_action(self, state, actions):
         if np.random.uniform() < self.epsilon:
-            return np.random.choice(4)
+            return np.random.choice(actions)
         else:
             return np.argmax(self.q_table[state[0], state[1]])
 
@@ -265,9 +280,6 @@ class QLearningAgent:
         max_next_q = np.max(self.q_table[next_state[0], next_state[1]])
         target = reward + self.gamma * max_next_q
         self.q_table[state[0], state[1], action] += self.alpha * (target - current_q)
-
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
 
 
 class MazeGUI:
@@ -289,7 +301,7 @@ class MazeGUI:
                 rect = (x * self.cell_size, y * self.cell_size,
                         self.cell_size, self.cell_size)
 
-                if self.env.maze[y, x] == 1:
+                if self.env.maze[x, y] == 1:
                     pygame.draw.rect(self.screen, (0, 0, 0), rect)
                 elif (x, y) == self.env.goal_pos:
                     pygame.draw.rect(self.screen, (255, 0, 0), rect)
@@ -307,7 +319,6 @@ class MazeGUI:
                            (path[-1][0] * self.cell_size + self.cell_size // 2,
                             path[-1][1] * self.cell_size + self.cell_size // 2),
                            self.cell_size // 3)
-
 
         pygame.display.flip()
 
@@ -327,7 +338,7 @@ class MazeGUI:
                     if event.type == pygame.QUIT:
                         pygame.quit()
                         sys.exit()
-                action = agent.choose_action(state)
+                action = agent.choose_action(state, env.get_valid_actions())
                 next_state, reward, done = env.step(action)
                 agent.learn(state, action, reward, next_state)
                 state = next_state
@@ -336,6 +347,9 @@ class MazeGUI:
                 if episode % 100 == 0:
                     self.draw_maze(path)
                     self.clock.tick(60)
+
+            if agent.epsilon > agent.epsilon_min:
+                agent.epsilon *= agent.epsilon_decay
 
             if episode % 100 == 0:
                 print(f"Episode: {episode}, Reward: {total_reward}, Epsilon: {agent.epsilon:.4f}")
@@ -352,7 +366,7 @@ class MazeGUI:
                     sys.exit()
 
             if not done:
-                action = agent.choose_action(state)
+                action = agent.choose_action(state, env.get_valid_actions())
                 next_state, reward, done = env.step(action)
                 state = next_state
                 path.append(state)
